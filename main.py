@@ -1,44 +1,49 @@
 from datetime import datetime, timedelta
 import os
 import tkinter as tk
+from typing import Any, Union
 
 import pandas as pd
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from PIL import Image, ImageTk
 
-months = [
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December'
-]
+
+def on_start(*args: Any, **kwargs: Any) -> Any:
+    log(f'Session {frame.get_session_name()} started')
 
 
-def output(frame: tk.Frame, message: str, color='white') -> None:
+def on_end(*args: Any, **kwargs: Any) -> Any:
+    log(f'Session {frame.get_session_name()} ended')
+
+
+def output(message: str, color='white') -> None:
+    """Sends output to console and application"""
     print(message)
-    frame.message_label['fg'] = color
-    frame.message_label['text'] = message
+    try:
+        frame.message_label['fg'] = color
+        frame.message_label['text'] = message
+    except NameError:
+        pass
 
-
-def handle_error(frame: tk.Frame, str: str) -> None:
-    output(frame, str)
+def handle_error(str: str) -> None:
+    """Exit handling for fatal issues"""
+    output(str)
     quit()
 
 
-def log(str: str, log_list: list) -> list:
-    """Appends a timestamped str to log_list"""
+def log(str: str) -> list:
+    """Appends a timestamped str to the log"""
     
-    log_list.append(f'[{datetime.now().isoformat()}] {str}')
-    return log_list
+    with open(
+        make_abs_time_dir(
+            'files\\logs', 
+            f'{datetime.now().day}.txt',
+        ), 
+        mode='a', 
+        encoding='UTF-8',
+    ) as f:
+        f.write(f'[{datetime.now().isoformat()}] {str}')
 
 
 def get_repeat_num(head: str, list: list) -> str:
@@ -51,15 +56,9 @@ def get_repeat_num(head: str, list: list) -> str:
     return head + add[0]
 
 
-def write_session(log_list: list, ses_df: DataFrame, ses_names: list[str]) -> None:
-    """Writes the log and csv output files specified by the given data"""
-
-    #Handling for logs
-    log_path = make_abs_time_dir('files\\logs', 'txt', ses_names)
-    with open(log_path, mode='w', encoding='UTF-8') as f:
-        f.writelines(log_list)
+def write_session(ses_df: DataFrame, ses_name: str) -> None:
+    """Writes the csv output files specified by the given data"""
     
-    #Handling for tables
     #Formats ses_df (session_dataframe) for output
     ses_df_copy = ses_df.copy()
     ses_df_copy['Credit'] = ses_df['Credit'].astype(int)
@@ -76,25 +75,28 @@ def write_session(log_list: list, ses_df: DataFrame, ses_names: list[str]) -> No
         }
     )
     #Writes modified copy of ses_df
-    table_path = make_abs_time_dir('files\\tables', 'csv', ses_names)
+    table_path = make_abs_time_dir('files\\tables', f'{ses_name}.csv')
     ses_df_copy.to_csv(table_path)
 
 
-def make_abs_time_dir(rel_path: str, ext: str, names: list) -> str:
+def make_abs_time_dir(rel_path: str, fname: str) -> str:
     """
     Calculates file name (so there is no conflict within names), 
     and creates directories leading up to the file name
     """
+
     now = datetime.now()
 
-    out_dir = f'{os.getcwd()}\\{rel_path}\\{now.year}\\{months[now.month - 1]}'
+    #https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes
+    out_dir = f'{os.getcwd()}\\{rel_path}\\{now.strftime("%Y/%m-%B")}'
+    out_dir = out_dir.replace("/", "\\")
 
     #Creates output_directory if it doesn't already exist
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
 
     #Output file name with relative directory
-    return f'{out_dir}\\{get_repeat_num(str(now.day), names)}.{ext}'
+    return f'{out_dir}\\{fname}'
 
 
 def sort_key(series: Series) -> Series:
@@ -102,7 +104,7 @@ def sort_key(series: Series) -> Series:
 
     #For the grade column, sort new members last (True sorts after False)
     if series.name == 'Grade':
-        return series == 9
+        return series <= 10
 
     #For 'Full Name', sort alphabetically by last, then first name
     string = series.str
@@ -155,22 +157,22 @@ def format_output_table(
     ) -> DataFrame:
     """Returns a properly formatted csv_table"""
 
-    #Technically a one-liner
     #First, merges csv_table and member_table such that:
     #   Members removed from member_table are removed
     #   Members added to member_table are added
     #Next, adds a new column for this session and populates with False
-    return pd.merge(
+    new_csv_table = pd.merge(
         csv_df, 
         member_df.drop(columns=['Grade']),
         how='right', 
         on=['ID', 'Full Name']
-    ).assign(
+    )
+    return new_csv_table.assign(
         **{
             get_repeat_num(
                 datetime.now().isoformat()[:10], 
                 csv_df.columns
-            ): [False] * len(csv_df)
+            ): [False] * len(new_csv_table)
         }
     )
 
@@ -251,16 +253,25 @@ def sign_in_out(ID: int, session_df: DataFrame, reqd_hours: int) -> bool:
     return True
 
 
-def handle_input(frame: tk.Frame, ID: int) -> None:
+def handle_input(ses_df: DataFrame, ID: int) -> None:
+    """Called when a valid input is provided and enter is pressed"""
+
     #Reset text input field
-    frame.ID_input_field.delete(0, len(frame.ID_input_field.get()))
+    try:
+        frame.reset_input_field()
+    except NameError:
+        raise RuntimeError('handle_input cannot be run before GUI is initialized')
     
     #Uses sign_in_out output to determine sign-in or sign-out
     io = not sign_in_out(ID, frame.ses, frame.cfgs['requiredHours'])
     io = ['in', 'out'][int(io)]
     
-    output(frame, f'You have successfully signed {io}!', frame.fg_color)
-    log(f'{ID} signed {io}', frame.log_list)
+    fname = ses_df.at[ID, "Full Name"].split(" ")[0]
+    output(
+        f'Thanks {fname}, You have successfully signed {io}!', 
+        frame.fg_color
+    )
+    log(f'{ID} signed {io}')
 
 
 class AttendanceGUI(tk.Frame):
@@ -279,7 +290,6 @@ class AttendanceGUI(tk.Frame):
         self.out = format_output_table(get_output_table(), self.mem)
         self.ses = format_session_table(self.mem)
         self.cfgs = read_cfgs()
-        self.log_list = []
 
         #Foreground and background colors
         if self.cfgs['backgroundColor'] not in ('black', 'white'):
@@ -342,27 +352,41 @@ class AttendanceGUI(tk.Frame):
         self.root.protocol('WM_DELETE_WINDOW', self.handle_exit)
         self.ID_input_field.bind('<Return>', self.button_pressed)
 
+    def get_input(self) -> Union[str, int]:
+        """
+        Returns value entered in input field.
+        Returns as int if possible, otherwise string
+        """
+
+        input = self.ID_input_field.get()
+        try:
+            return int(input)
+        except ValueError:
+            return input
+    
+    def reset_input_field(self) -> None:
+        """Sets input field value to blank"""
+        self.ID_input_field.delete(0, len(str(self.get_input())))
+
     def button_pressed(self, *args) -> None:
         """
-        Called whenever the enter key is pressed
+        Called whenever the enter key/button is pressed
 
         Evaluates ID interpretation logic and 
         manages handling of signing in/out
         """
 
-        ID = self.ID_input_field.get()
+        ID = self.get_input()
         
-        try:
-            ID = int(ID)
-        except ValueError:
-            output(self, f'{ID} cannot be interpreted as an ID number, please try something different', 'red')
+        if not isinstance(ID, int):
+            output(f'{ID} cannot be interpreted as an ID number, please try something different', 'red')
             return
 
         if ID not in self.mem.index:
-            output(self, f'{ID} not found in the Member List, please try again', 'red')
+            output(f'{ID} not found in the Member List, please try again', 'red')
             return
         
-        handle_input(self, ID)
+        handle_input(self.ses, ID)
     
     def handle_exit(self) -> None:
         """
@@ -373,18 +397,32 @@ class AttendanceGUI(tk.Frame):
 
         #Converts 'Credit' column from boolean to int for convenience
         self.out[self.out.columns[-1]] = self.ses['Credit'].astype(int)
+        #Replaces NaN with empty string and converts all floats to int
+        credit_columns = self.out[self.out.columns[1:]]\
+            .fillna(-1)\
+            .astype(int)\
+            .astype(str)
+        credit_columns[credit_columns == '-1'] = ''
+        self.out[self.out.columns[1:]] = credit_columns
+
+        #Get session name from datetime and self.out
+        session_name = datetime.now().strftime("%B-%d-%Y")
+        suffix = self.out.columns[-1].split(' ')[1:]
+        session_name += suffix[0] if suffix else ''
 
         #Writes final outputs
-        session_names = [n[8:] for n in self.out.columns][2:]
-        write_session(self.log_list, self.ses, session_names)
+        write_session(self.ses, session_name)
         self.out.to_csv('Output Table.csv')
-
-        log('session ended', self.log_list)
 
         self.root.destroy()
 
 
 if __name__ == '__main__':
     root = tk.Tk()
-    GUI = AttendanceGUI(root=root)
+    frame = GUI = AttendanceGUI(root=root)
+
+    on_start()
+    
     GUI.mainloop()
+
+    on_end()
